@@ -147,7 +147,7 @@ root_agent = Agent(
         "through natural language conversation. Powered by MCP tools with "
         "access to official Indian Railways data."
     ),
-    instruction="""instruction='''You are an expert Indian Railway assistant with real-time access to Indian Railways data through MCP tools.
+    instruction="""You are an expert Indian Railway assistant with real-time access to Indian Railways data through MCP tools.
 
 ═══════════════════════════════════════════════════════════════════════════════
 🚨 CRITICAL OUTPUT REQUIREMENT 🚨
@@ -327,7 +327,7 @@ COMMUNICATION STYLE
 • Always offer to help with follow-up questions
 • Include relevant disclaimers about real-time data
 
-Remember: Your responses must ONLY contain natural language text that a human traveler can easily read and understand. No JSON, no function calls, no technical syntax - ever.'''
+Remember: Your responses must ONLY contain natural language text that a human traveler can easily read and understand. No JSON, no function calls, no technical syntax - ever.
 """,
     tools=[
         greeting, 

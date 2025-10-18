@@ -377,6 +377,11 @@ async def workflow(query: str):
     """Main workflow that maintains session and MCP connection across calls"""
     global _session_service, _runner, _session
     
+    # WORKAROUND: Reset session for each query to avoid MCP state corruption
+    # This ensures tools execute properly and generate natural language
+    # Trade-off: Loses conversation context but ensures correct responses
+    await reset_session()
+    
     # Initialize session if not already done
     session_service, runner, session = await initialize_session()
     

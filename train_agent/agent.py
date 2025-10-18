@@ -1,5 +1,6 @@
 import asyncio
 import os
+import logging
 from google.adk import Agent, Runner
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.sessions import InMemorySessionService
@@ -8,11 +9,34 @@ from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams
 from mcp import StdioServerParameters
 
-os.environ["OLLAMA_API_BASE"] = "http://localhost:11434"
+# Import configuration
+try:
+    from config import config
+except ImportError:
+    # Fallback to default values if config module not available
+    class config:
+        OLLAMA_API_BASE = "http://localhost:11434"
+        MODEL_NAME = "ollama/glm-4.6:cloud"
+        TEMPERATURE = 0.1
+        MCP_ENDPOINT = "https://railway-mcp.amithv.xyz/mcp"
+        MCP_TIMEOUT = 360
+        LOG_LEVEL = "INFO"
+        APP_NAME = "train_agent_app"
 
+# Configure logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=getattr(logging, config.LOG_LEVEL),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# Set Ollama API base from config
+os.environ["OLLAMA_API_BASE"] = config.OLLAMA_API_BASE
+
+# Initialize LLM with configuration
 llm = LiteLlm(
-    model="ollama/glm-4.6:cloud",
-    temperature=0.1
+    model=config.MODEL_NAME,
+    temperature=config.TEMPERATURE
 )
 
 def greeting(query: str) -> str:
@@ -41,6 +65,8 @@ def greeting(query: str) -> str:
         return "Welcome to Indian Railway Assistant! How can I help you today?"
 
 # Initialize MCP toolset
+# Using Indian Railway MCP Server: https://github.com/amith-vp/indian-railway-mcp
+# This provides real-time access to Indian Railway data through MCP protocol
 mcp_toolset = MCPToolset(
     connection_params=StdioConnectionParams(
         server_params=StdioServerParameters(
@@ -48,17 +74,79 @@ mcp_toolset = MCPToolset(
             args=[
                 "-y",
                 "mcp-remote",
-                "https://railway-mcp.amithv.xyz/mcp",
+                config.MCP_ENDPOINT,  # MCP endpoint from config
             ],
         ),
-        timeout=360
+        timeout=config.MCP_TIMEOUT  # Timeout from config (default: 6 minutes)
     ),
 )
+
+# ════════════════════════════════════════════════════════
+# ROOT AGENT CONFIGURATION
+# ════════════════════════════════════════════════════════
+"""
+Train_Agent - Indian Railway Information Assistant
+
+DESCRIPTION:
+An intelligent conversational agent that provides comprehensive Indian Railway 
+information through natural language interaction. Powered by Google ADK and 
+connected to real-time railway data via Model Context Protocol (MCP).
+
+CAPABILITIES:
+• Train Search & Scheduling - Find trains between any two stations
+• Live Train Status - Real-time tracking and delay information
+• PNR Status Checking - Verify booking status and seat confirmation
+• Seat Availability - Check available seats across all classes
+• Station Information - Get station codes, facilities, and details
+• Route Planning - Optimal journey suggestions with connections
+
+TECHNICAL ARCHITECTURE:
+• LLM: Ollama GLM-4.6 (cloud edition) via LiteLLM
+• Tools: MCP Toolset + Custom greeting function
+• Data Source: Indian Railway MCP Server (github.com/amith-vp/indian-railway-mcp)
+• MCP Endpoint: railway-mcp.amithv.xyz
+• Session Management: In-memory persistent sessions
+• Response Format: Human-readable natural language only
+
+KEY FEATURES:
+• Context-aware conversations with memory across interactions
+• Structured output formatting (tables, bullet points, markdown)
+• Error handling with user-friendly fallback messages
+• Real-time data validation and sanitization
+• Multi-turn dialogue support for complex queries
+
+USE CASES:
+1. Travel Planning - "Show trains from Delhi to Mumbai tomorrow"
+2. Booking Assistance - "Check seat availability in 3AC for train 12345"
+3. Journey Tracking - "Where is train 12760 right now?"
+4. Status Updates - "Check PNR 1234567890"
+5. Station Queries - "What's the station code for Hyderabad?"
+
+OUTPUT REQUIREMENTS:
+• Plain English responses only (no JSON/code)
+• Structured formatting with tables and lists
+• Contextual recommendations and alternatives
+• Clear error messages without technical jargon
+• Conversational tone with helpful suggestions
+
+AGENT METADATA:
+• Version: 1.0.0
+• Language: English (Indian context)
+• Domain: Indian Railways Transportation
+• Response Time: ~2-5 seconds (depending on query complexity)
+• Accuracy: Real-time data from official railway systems
+"""
 
 # Create root agent
 root_agent = Agent(
     model=llm,
     name='Train_Agent',
+    description=(
+        "Expert Indian Railway assistant providing real-time train schedules, "
+        "PNR status, seat availability, live tracking, and station information "
+        "through natural language conversation. Powered by MCP tools with "
+        "access to official Indian Railways data."
+    ),
     instruction="""instruction='''You are an expert Indian Railway assistant with real-time access to Indian Railways data through MCP tools.
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -253,8 +341,8 @@ Remember: Your responses must ONLY contain natural language text that a human tr
 _session_service = None
 _runner = None
 _session = None
-_user_id = "user123"
-_app_name = "train_agent_app"
+_user_id = "user123"  # TODO: Make this dynamic per user when authentication is added
+_app_name = config.APP_NAME
 
 async def initialize_session():
     """Initialize session service, runner, and session once"""
@@ -262,7 +350,7 @@ async def initialize_session():
     
     if _session_service is None:
         _session_service = InMemorySessionService()
-        print(">>> Created new session service")
+        logger.info("Created new session service")
     
     if _runner is None:
         _runner = Runner(
@@ -270,14 +358,14 @@ async def initialize_session():
             app_name=_app_name,
             session_service=_session_service
         )
-        print(">>> Created new runner")
+        logger.info("Created new runner")
     
     if _session is None:
         _session = await _session_service.create_session(
             user_id=_user_id,
             app_name=_app_name
         )
-        print(f">>> Created new session: {_session.id}")
+        logger.info(f"Created new session: {_session.id}")
     
     return _session_service, _runner, _session
 
@@ -290,30 +378,47 @@ async def workflow(query: str):
     
     new_message = types.Content(role="user", parts=[types.Part(text=query)])
     final_response = ""
-    print(f"\n>>> User Query: {query}")
-    print(f">>> Using session: {session.id}")
-    print(f">>> MCP Toolset active: {mcp_toolset is not None}")
+    all_responses = []
+    logger.info(f"User Query: {query}")
+    logger.debug(f"Using session: {session.id}")
+    logger.debug(f"MCP Toolset active: {mcp_toolset is not None}")
     
     async for event in runner.run_async(
         user_id=_user_id, 
         session_id=session.id, 
         new_message=new_message
     ):
-        print(f">>> Event type: {type(event).__name__}")
+        logger.debug(f"Event type: {type(event).__name__}")
         
-        # Check if it's the final response
+        # Collect ALL responses, not just the first one
         if event.is_final_response():
             # Extract text from the response
             if hasattr(event, 'content') and hasattr(event.content, 'parts'):
                 for part in event.content.parts:
                     if hasattr(part, 'text') and part.text:
-                        final_response += part.text
-            print(f">>> Agent Response: {final_response}")
+                        response_text = part.text
+                        all_responses.append(response_text)
+                        logger.debug(f"Collected response #{len(all_responses)}: {response_text[:100]}...")
+    
+    # Process all collected responses
+    # Skip tool call responses and use the last natural language response
+    for response in reversed(all_responses):  # Start from the most recent
+        # Check if this is a natural language response (not a tool call)
+        if "Tool Calls:" not in response and '"type": "function"' not in response and len(response) > 50:
+            final_response = response
+            logger.info(f"Using natural language response: {final_response[:100]}...")
             break
     
-    # If no response was captured, return a fallback message
+    # If we only got tool calls, warn about it
+    if not final_response and all_responses:
+        logger.warning(f"Only received tool call responses, no natural language. Responses count: {len(all_responses)}")
+        logger.debug(f"Last response was: {all_responses[-1][:200]}...")
+        final_response = "I apologize, but I'm having trouble formatting the response. Please try asking in a different way."
+    
+    # If no response was captured at all, return a fallback message
     if not final_response:
         final_response = "I apologize, but I couldn't process that request. Please try again."
+        logger.warning("No response captured from agent")
     
     return final_response
 
@@ -323,7 +428,7 @@ async def reset_session():
     _session_service = None
     _runner = None
     _session = None
-    print(">>> Session reset")
+    logger.info("Session reset")
 
 if __name__ == "__main__":
     asyncio.run(workflow(query="get info of 12760 train"))

@@ -10,6 +10,33 @@ from datetime import datetime
 import os
 from pathlib import Path
 
+# Import configuration
+try:
+    from config import config
+except ImportError:
+    # Fallback if config not available
+    class config:
+        LOG_LEVEL = "INFO"
+        MAX_INPUT_LENGTH = 500
+        RATE_LIMIT_ENABLED = False
+        RATE_LIMIT_REQUESTS = 10
+        RATE_LIMIT_WINDOW = 60
+
+# Import utilities
+try:
+    from utils import RateLimiter, SimpleCache
+except ImportError:
+    # Fallback if utils not available
+    RateLimiter = None
+    SimpleCache = None
+
+# Import authentication
+try:
+    from auth import login_form, logout
+    AUTH_AVAILABLE = True
+except ImportError:
+    AUTH_AVAILABLE = False
+
 # ════
 # CONFIGURATION
 # ════
@@ -43,7 +70,7 @@ st.markdown("""
 <style>
     /* Clean white background */
     .main {
-        background: #ffff;
+        background: #ffffff;
     }
 
     /* Hide Streamlit elements */
@@ -66,7 +93,7 @@ st.markdown("""
 
     /* Assistant messages - white */
     [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
-        background: #ffff;
+        background: #ffffff;
     }
 
     /* Input box */
@@ -147,6 +174,14 @@ with st.sidebar:
         st.session_state.conversation_history = []
         reset_session()
         st.rerun()
+    
+    # Add logout button if authenticated
+    if hasattr(config, 'AUTH_ENABLED') and config.AUTH_ENABLED and AUTH_AVAILABLE:
+        if st.session_state.get('authenticated', False):
+            st.markdown("---")
+            st.markdown(f"**User:** {st.session_state.get('username', 'Unknown')}")
+            if st.button("🚪 Logout"):
+                logout()
 
 # ════
 # SESSION STATE
@@ -163,9 +198,84 @@ if 'event_loop' not in st.session_state:
     st.session_state.event_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(st.session_state.event_loop)
 
+# Initialize rate limiter
+if 'rate_limiter' not in st.session_state and RateLimiter and config.RATE_LIMIT_ENABLED:
+    st.session_state.rate_limiter = RateLimiter(
+        max_requests=config.RATE_LIMIT_REQUESTS,
+        window=config.RATE_LIMIT_WINDOW
+    )
+
+# Initialize cache
+if 'cache' not in st.session_state and SimpleCache:
+    st.session_state.cache = SimpleCache(ttl=3600)  # 1 hour cache
+
+# Generate a simple user ID (in production, use actual authentication)
+if 'user_id' not in st.session_state:
+    import uuid
+    st.session_state.user_id = str(uuid.uuid4())[:8]
+
 # ════
 # UTILITY FUNCTIONS
 # ════
+
+def sanitize_input(text: str) -> str:
+    """Sanitize user input to prevent injection and limit length.
+    
+    Args:
+        text: Raw user input
+        
+    Returns:
+        str: Sanitized input
+    """
+    if not text:
+        return ""
+    
+    # Remove leading/trailing whitespace
+    text = text.strip()
+    
+    # Limit maximum length to prevent abuse
+    if len(text) > config.MAX_INPUT_LENGTH:
+        text = text[:config.MAX_INPUT_LENGTH]
+        logger.warning(f"Input truncated to {config.MAX_INPUT_LENGTH} characters")
+    
+    # Remove control characters except newlines and tabs
+    text = ''.join(char for char in text if char.isprintable() or char in '\n\t')
+    
+    # Basic XSS prevention (remove HTML/script tags)
+    import re
+    text = re.sub(r'<[^>]+>', '', text)
+    
+    return text
+
+def validate_input(text: str) -> tuple[bool, str]:
+    """Validate user input.
+    
+    Args:
+        text: User input to validate
+        
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    if not text or not text.strip():
+        return False, "Please enter a message."
+    
+    if len(text.strip()) < 2:
+        return False, "Message too short. Please provide more details."
+    
+    # Check for suspicious patterns
+    suspicious_patterns = [
+        r'<script',
+        r'javascript:',
+        r'onerror=',
+        r'onclick=',
+    ]
+    
+    import re
+    for pattern in suspicious_patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            return False, "Invalid input detected. Please try again."
+    
+    return True, ""
 
 def extract_response(result) -> str:
     try:
@@ -180,6 +290,15 @@ def extract_response(result) -> str:
         return str(result)
     except Exception as e:
         return f"Error: {str(e)}"
+
+# ════
+# AUTHENTICATION CHECK
+# ════
+
+# Check if authentication is required and enabled
+if hasattr(config, 'AUTH_ENABLED') and config.AUTH_ENABLED and AUTH_AVAILABLE:
+    if not login_form():
+        st.stop()
 
 # ════
 # MAIN INTERFACE
@@ -197,6 +316,23 @@ for message in st.session_state.messages:
 
 # Chat input
 if prompt := st.chat_input("Message Railway Assistant"):
+    # Check rate limit
+    if config.RATE_LIMIT_ENABLED and 'rate_limiter' in st.session_state:
+        is_allowed, seconds = st.session_state.rate_limiter.is_allowed(st.session_state.user_id)
+        if not is_allowed:
+            st.error(f"⏱️ Too many requests. Please wait {seconds} seconds before trying again.")
+            st.stop()
+    
+    # Validate and sanitize input
+    is_valid, error_msg = validate_input(prompt)
+    
+    if not is_valid:
+        st.error(error_msg)
+        st.stop()
+    
+    # Sanitize the input
+    prompt = sanitize_input(prompt)
+    
     # Add user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.session_state.conversation_history.append({"role": "user", "content": prompt})
@@ -215,15 +351,20 @@ if prompt := st.chat_input("Message Railway Assistant"):
         
         try:
             response = loop.run_until_complete(workflow(prompt))
+        except TimeoutError:
+            logger.error("Request timeout")
+            response = "⏱️ Request timed out. The server took too long to respond. Please try again."
+        except ConnectionError as e:
+            logger.error(f"Connection error: {str(e)}")
+            response = "🔌 Connection error. Please check your internet connection and try again."
         except Exception as e:
             logger.error(f"Error: {str(e)}", exc_info=True)
-            response = f"❌ An error occurred: {str(e)}"
+            response = "❌ An error occurred while processing your request. Please try again or rephrase your question."
         
         # Clear animation and show response
         loading_placeholder.empty()
         st.markdown(response)
-
-    # Add assistant message
-    st.session_state.messages.append({"role": "assistant", "content": response})
-    st.session_state.conversation_history.append({"role": "assistant", "content": response})
-    st.rerun()
+        
+        # Add assistant message to session state
+        st.session_state.messages.append({"role": "assistant", "content": response})
+        st.session_state.conversation_history.append({"role": "assistant", "content": response})

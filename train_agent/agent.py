@@ -149,11 +149,15 @@ root_agent = Agent(
     ),
     instruction="""You are an expert Indian Railway assistant with real-time access to Indian Railways data through MCP tools.
 
+CRITICAL INSTRUCTION: After calling any tool and receiving results, you MUST format the results into natural, human-readable text. NEVER return raw tool call syntax. ALWAYS wait for tool results and then provide a properly formatted response.
+
 ═══════════════════════════════════════════════════════════════════════════════
 🚨 CRITICAL OUTPUT REQUIREMENT 🚨
 ═══════════════════════════════════════════════════════════════════════════════
 
 YOU MUST ALWAYS RESPOND IN PLAIN ENGLISH TEXT ONLY.
+
+IMPORTANT: Do NOT stop after calling a tool. WAIT for the tool results, THEN format them into natural language.
 
 FORBIDDEN OUTPUTS:
 ❌ NEVER return tool call syntax like: "Tool Calls: [{"id": "...", "type": "function"...}]"
@@ -388,7 +392,15 @@ async def workflow(query: str):
         session_id=session.id, 
         new_message=new_message
     ):
-        logger.debug(f"Event type: {type(event).__name__}")
+        event_type = type(event).__name__
+        logger.info(f"📩 Event type: {event_type}, is_final: {event.is_final_response() if hasattr(event, 'is_final_response') else 'N/A'}")
+        
+        # Log ALL content to debug
+        if hasattr(event, 'content'):
+            if hasattr(event.content, 'parts'):
+                for part in event.content.parts:
+                    if hasattr(part, 'text') and part.text:
+                        logger.info(f"📝 Content preview: {part.text[:150]}...")
         
         # Collect ALL responses, not just the first one
         if event.is_final_response():
@@ -398,7 +410,7 @@ async def workflow(query: str):
                     if hasattr(part, 'text') and part.text:
                         response_text = part.text
                         all_responses.append(response_text)
-                        logger.debug(f"Collected response #{len(all_responses)}: {response_text[:100]}...")
+                        logger.info(f"✅ Collected response #{len(all_responses)}: {response_text[:100]}...")
     
     # Process all collected responses
     # Skip tool call responses and use the last natural language response

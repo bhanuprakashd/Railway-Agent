@@ -18,7 +18,7 @@ try:
 except ImportError:
     # Fallback to default values if config module not available
     class config:
-        GOOGLE_API_KEY = "AIzaSyD-2g7JgLvtMiYGkrhuBoXRwn-h1P7Df9k"
+        GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
         GOOGLE_CLOUD_PROJECT = "rajesh-more-cwx-internal"
         GOOGLE_CLOUD_LOCATION = "us-central1"
         MODEL_NAME = "gemini/gemini-2.5-flash"

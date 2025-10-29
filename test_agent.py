@@ -64,7 +64,7 @@ for i, query in enumerate(test_queries, 1):
     
     try:
         # Send query to agent using the correct method
-        response_stream = agent_engine.stream_query(message=query)
+        response_stream = agent_engine.stream_query(message=query,)
         
         # Collect the streaming response
         full_response = ""
